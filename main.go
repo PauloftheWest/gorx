@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"unsafe"
-    "gorx/pkg"
+    //"gorx/pkg"
 )
 
 /*
@@ -38,19 +38,25 @@ static void* allocArgv(unsigned int argc) {
 */
 import "C"
 
-func write_header(f *os.File) {
+func write_header(f *os.File, include string, imp string) {
 	f.WriteString("package gorx\n\n")
 	f.WriteString("/*\n")
 	f.WriteString("#cgo CFLAGS: -I ../ext/orx/code/include\n")
 	f.WriteString("#cgo LDFLAGS: -lorxd -L ../ext/orx/code/lib/dynamic/\n")
 
 	f.WriteString("#include \"orx.h\"\n")
-	f.WriteString("#include \"object/orxObject.h\"\n")
+    if include != "" {
+	    f.WriteString("#include \"" + include + "\"\n")
+    }
 	f.WriteString("#include <stdlib.h>\n")
 	f.WriteString("#include <stdio.h>\n")
 	f.WriteString("*/\n")
 	f.WriteString("import \"C\"\n")
-	f.WriteString("import \"unsafe\"\n\n")
+    if imp != "" {
+	    f.WriteString("import \"" + imp + "\"\n")
+    }
+    f.WriteString("\n")
+
 }
 
 func generate_struct(structs []string) string {
@@ -276,6 +282,33 @@ func generate_extern(line string) string {
 	return fh
 }
 
+//func generate_extern(line string) string {
+func generate_file(name string, orx_file string) {
+	f, e := os.Create("pkg/" + name + ".go")
+
+	if e != nil {
+		panic(e)
+	}
+
+	write_header(f, orx_file, "unsafe")
+
+	file, err := os.Open("./ext/orx/code/include/" + orx_file)
+	if err != nil {
+		fmt.Println("opening file error", err)
+	}
+	defer file.Close()
+
+	scanner := bufio.NewScanner(file)
+	scanner.Split(bufio.ScanLines)
+
+	for scanner.Scan() {
+		line := scanner.Text()
+		if strings.Contains(line, "extern") == true {
+			f.WriteString(generate_extern(line))
+		}
+	}
+}
+
 func main() {
 	//C.orx_Execute(argc, argv, GORXInit, GORXRun, GORXExit);
 	argv := os.Args
@@ -288,39 +321,119 @@ func main() {
 		defer C.free(unsafe.Pointer(c_argv[i]))
 	}
 
-	gorx.Object_Create()
+	//gorx.Object_Create()
 	// Set the bootstrap function to provide at least one resource storage before loading any config files
 	C.orxConfig_SetBootstrap(C.orxCONFIG_BOOTSTRAP_FUNCTION(C.Bootstrap))
 
 	fmt.Println("Hello, World!")
 
-	file, err := os.Open("./ext/orx/code/include/object/orxObject.h")
-	if err != nil {
-		fmt.Println("opening file error", err)
-	}
-	defer file.Close()
-
-	f, e := os.Create("pkg/obj.go")
+	types_file, e := os.Create("pkg/types.go")
 	if e != nil {
 		panic(e)
 	}
-	write_header(f)
-	f.WriteString(generate_struct([]string{"object", "vector", "obox"}))
-	scanner := bufio.NewScanner(file)
-	scanner.Split(bufio.ScanLines)
-	for scanner.Scan() {
-		line := scanner.Text()
-		if strings.Contains(line, "extern") == true {
-			f.WriteString(generate_extern(line))
-		}
-	}
-	//NewObject()
-	//scanner := bufio.NewScanner("./ext/orx/code/include/object/orxObject.h")
-	//scanner.Split(bufio.ScanLines)
-	//gorx.NewObject()
+    defer types_file.Close()
+	write_header(types_file, "", "")
+	types_file.WriteString(generate_struct([]string{"object", "vector", "obox"}))
 
-	//gorx.Create()
-	/*
+    generate_file("anim", "anim/orxAnim.h")
+    generate_file("anim_pointer", "anim/orxAnimPointer.h")
+    generate_file("anim_set", "anim/orxAnimSet.h")
+
+    generate_file("type", "base/orxType.h")
+    generate_file("decl", "base/orxDecl.h")
+    generate_file("build", "base/orxBuild.h")
+    generate_file("module", "base/orxModule.h")
+    generate_file("version", "base/orxVersion.h")
+
+    generate_file("command", "core/orxCommand.h")
+    generate_file("config", "core/orxConfig.h")
+    generate_file("console", "core/orxConsole.h")
+    generate_file("resource", "core/orxResource.h")
+    generate_file("thread", "core/orxThread.h")
+    generate_file("locale", "core/orxLocale.h")
+    generate_file("system", "core/orxSystem.h")
+    generate_file("clock", "core/orxClock.h")
+    generate_file("event", "core/orxEvent.h")
+
+    generate_file("fps", "debug/orxFPS.h")
+    //generate_file("debug", "debug/orxDebug.h")
+    generate_file("profiler", "debug/orxProfiler.h")
+
+    generate_file("font", "display/orxFont.h")
+    generate_file("display", "display/orxDisplay.h")
+    generate_file("texture", "display/orxTexture.h")
+    generate_file("screeshot", "display/orxScreenshot.h")
+    generate_file("graphic", "display/orxGraphic.h")
+    generate_file("text", "display/orxText.h")
+
+    generate_file("aabox", "math/orxAABox.h")
+    //generate_file("vector", "math/orxVector.h")
+    generate_file("obox", "math/orxOBox.h")
+    generate_file("math", "math/orxMath.h")
+
+    generate_file("bank", "memory/orxBank.h")
+    generate_file("memory", "memory/orxMemory.h")
+
+    generate_file("fx", "object/orxFX.h")
+    generate_file("trigger", "object/orxTrigger.h")
+    generate_file("object", "object/orxObject.h")
+    generate_file("time_line", "object/orxTimeLine.h")
+    generate_file("fx_pointer", "object/orxFXPointer.h")
+    generate_file("frame", "object/orxFrame.h")
+    generate_file("structure", "object/orxStructure.h")
+    generate_file("spawner", "object/orxSpawner.h")
+
+    generate_file("body", "physics/orxBody.h")
+    generate_file("physics", "physics/orxPhysics.h")
+
+    generate_file("shader_pointer", "render/orxShaderPointer.h")
+    generate_file("viewport", "render/orxViewport.h")
+    generate_file("render", "render/orxRender.h")
+    generate_file("shader", "render/orxShader.h")
+    generate_file("camera", "render/orxCamera.h")
+
+    generate_file("sound", "sound/orxSound.h")
+    generate_file("sound_pointer", "sound/orxSoundPointer.h")
+    generate_file("sound_system", "sound/orxSoundSystem.h")
+
+    generate_file("string", "utils/orxString.h")
+    generate_file("hash_table", "utils/orxHashTable.h")
+    generate_file("link_list", "utils/orxLinkList.h")
+    generate_file("tree", "utils/orxTree.h")
+
+    generate_file("keyboard", "io/orxKeyboard.h")
+    generate_file("input", "io/orxInput.h")
+    generate_file("mouse", "io/orxMouse.h")
+    generate_file("joystick", "io/orxJoystick.h")
+    //generate_file("file", "io/orxFile.h")
+
+/*
+./display/orxColorList.inc
+./orxKernel.h
+./main
+./main/android
+./main/android/orxAndroid.h
+./main/android/orxAndroidActivity.h
+./main/orxParam.h
+./orxPluginAPI.h
+./orxUtils.h
+./plugin/orxPluginUser.h
+./plugin/orxPluginCore.h
+./plugin/orxPluginType.h
+./plugin/define/orxPlugin_Keyboard.h
+./plugin/define/orxPlugin_Joystick.h
+./plugin/define/orxPlugin_Render.h
+./plugin/define/orxPlugin_Physics.h
+./plugin/define/orxPlugin_Display.h
+./plugin/define/orxPlugin_Mouse.h
+./plugin/define/orxPlugin_CoreDefine.h
+./plugin/define/orxPlugin_CoreID.h
+./plugin/define/orxPlugin_SoundSystem.h
+./plugin/orxPlugin.h
+./orxInclude.h
+./orx.h
+*/
+    /*
 		C.orx_Execute(
 			argc,
 			(**C.char)(unsafe.Pointer(c_argv)),
@@ -387,3 +500,4 @@ func Exit() C.orxSTATUS {
 
 	return C.orxSTATUS_SUCCESS
 }
+
