@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"unsafe"
+    "gorx/pkg"
 )
 
 /*
@@ -37,28 +38,50 @@ static void* allocArgv(unsigned int argc) {
 */
 import "C"
 
-const FAILURE = 0
-const SUCCESS = 1
-const NUMBER = 2
+func write_header(f *os.File) {
+	f.WriteString("package gorx\n\n")
+	f.WriteString("/*\n")
+	f.WriteString("#cgo CFLAGS: -I ../ext/orx/code/include\n")
+	f.WriteString("#cgo LDFLAGS: -lorxd -L ../ext/orx/code/lib/dynamic/\n")
 
-// taking a struct
+	f.WriteString("#include \"orx.h\"\n")
+	f.WriteString("#include \"object/orxObject.h\"\n")
+	f.WriteString("#include <stdlib.h>\n")
+	f.WriteString("#include <stdio.h>\n")
+	f.WriteString("*/\n")
+	f.WriteString("import \"C\"\n")
+	f.WriteString("import \"unsafe\"\n\n")
+}
+
+func generate_struct(structs []string) string {
+	defs := ""
+	for i := 0; i < len(structs); i++ {
+		s := structs[i]
+		defs += fmt.Sprintf("type %s struct {\n    %s *C.orx%s\n}\n\n", s, s, strings.ToUpper(s))
+	}
+	return defs
+}
+
 /*
-type Object struct {
-	object *C.orxOBJECT
-}
-
-func NewObject() *Object {
-	obj := C.orxObject_Create()
-	return &Object{object: obj}
-}
-
-func (obj *Object) Enable(enable uint) bool {
-	C.orxObject_Enable(obj.object, C.uint(enable))
-	return true
-}
-*/
+ */
 
 //extern orxDLLAPI void orxFASTCALL           orxObject_Enable(orxOBJECT *_pstObject, orxBOOL _bEnable);
+
+func wrap_parameter(arg_type string, name_type string) string {
+    arg := ""
+    if arg_type == "void*" {
+        arg += "unsafe.Pointer("
+        arg += name_type
+        arg += ")"
+    } else if arg_type == "const orxSTRING*" || arg_type == "orxSTRING*"{
+        arg += "(**C.orxCHAR)("
+        arg += name_type
+        arg += ")"
+    } else {
+        arg += name_type
+    }
+    return arg
+}
 
 type extern_info struct {
 	return_type   string
@@ -67,36 +90,40 @@ type extern_info struct {
 	name_type     []string
 }
 
-func print_extern(line string) {
+func generate_extern(line string) string {
 	words := strings.Fields(line)
 	pos := 1
 	ei := &extern_info{}
 
-	for len(words) > pos && (words[pos] == "orxDLLAPI" || words[pos] == "orxFASTCALL") {
+    // Stip out unecessary tokens
+	for len(words) > pos && (words[pos] == "orxDLLAPI" || words[pos] == "orxFASTCALL" || words[pos] == "const") {
 		pos = pos + 1
 	}
 
 	if len(words) <= pos {
-		return
+		return ""
 	}
 
+    // Get return type
 	ei.return_type = words[pos]
 	pos = pos + 1
 	if len(words) <= pos {
-		return
+		return ""
 	}
 
+    // pointers in go are in front, wrap around
 	for words[pos][0] == '*' {
 		ei.return_type += "*"
 		words[pos] = words[pos][1:]
 	}
 
-	for len(words) > pos && (words[pos] == "orxDLLAPI" || words[pos] == "orxFASTCALL") {
+    // Stip out unecessary tokens
+	for len(words) > pos && (words[pos] == "orxDLLAPI" || words[pos] == "orxFASTCALL" || words[pos] == "const") {
 		pos = pos + 1
 	}
 
 	if len(words) <= pos {
-		return
+		return ""
 	}
 
 	header := strings.Split(words[pos], "(")
@@ -119,7 +146,7 @@ func print_extern(line string) {
 			name := strings.Split(words[pos], ")")[0]
 
 			ei.arg_type = append(ei.arg_type, strings.TrimSpace(arg))
-			ei.name_type = append(ei.name_type, strings.TrimSpace(name))
+			ei.name_type = append(ei.name_type, strings.Trim(strings.TrimSpace(name), ","))
 
 			arg = ""
 			pos = pos + 1
@@ -131,29 +158,40 @@ func print_extern(line string) {
 	}
 
 	/*
-	 */
-	fmt.Printf("=======================\n")
-	fmt.Printf("ret: %s\n", ei.return_type)
-	fmt.Printf("function_name: %s\n", ei.function_name)
-	for pos, _ = range ei.arg_type {
-		fmt.Printf("%d] arg: '%s' name: '%s'\n", pos, ei.arg_type[pos], ei.name_type[pos])
-	}
+		fmt.Printf("=======================\n")
+		fmt.Printf("ret: %s\n", ei.return_type)
+		fmt.Printf("function_name: %s\n", ei.function_name)
+		for pos, _ = range ei.arg_type {
+			fmt.Printf("%d] arg: '%s' name: '%s'\n", pos, ei.arg_type[pos], ei.name_type[pos])
+		}
+	*/
 
+    // Function start
 	fh := "func "
 
 	arg_pos := 0
 	self_func := false
+	self_type := ""
 	if len(ei.arg_type) > 0 && strings.Contains(ei.arg_type[0], "*") {
 		toks := strings.Split(ei.arg_type[0], " ")
 		name := toks[len(toks)-1]
 		name = name[0 : len(name)-1]
+		name = strings.Trim(name, "orx")
+		name = strings.ToLower(name)
+		self_type = name
 		fh += "(self *" + name + ") "
 		arg_pos++
 		self_func = true
 	}
 
-	fh += ei.function_name + " ("
+	if self_func {
+		fn := strings.Split(ei.function_name, "_")
+		fh += fn[len(fn)-1] + " ("
+	} else {
+		fh += strings.Trim(ei.function_name, "orx") + " ("
+	}
 
+    // Function Arguments
 	first_arg := true
 	for arg_pos < len(ei.arg_type) {
 		if !first_arg {
@@ -169,6 +207,10 @@ func print_extern(line string) {
 			fh += "*"
 			arg = arg[0 : len(arg)-1]
 		}
+
+        // Go ignores const
+        arg = strings.ReplaceAll(arg, "const ", "")
+
 		fh += "C." + arg
 
 		first_arg = false
@@ -177,17 +219,42 @@ func print_extern(line string) {
 
 	fh += " ) "
 	rt := ei.return_type
-	for rt[len(rt)-1] == '*' {
+
+	for ei.return_type != "void*" && rt[len(rt)-1] == '*' {
 		fh += "*"
 		rt = rt[0 : len(rt)-1]
 	}
-	fh += "C." + rt
+
+    if ei.return_type == "void*" {
+        rt = "string"
+    }
+
+    if ei.return_type != "void" {
+        if rt != "string" {
+            fh += "C."
+        }
+	    fh += rt
+    }
+
 	fh += " {\n"
-	fh += "    return C." + ei.function_name + "("
+	fh += "    "
+
+    // Now the return statement
+    if ei.return_type != "void" {
+        fh += "return "
+    }
+
+    if ei.return_type == "void*" {
+        fh += "C.GoString((*C.char)(*(*unsafe.Pointer)("
+      //return C.GoString((*C.char)(*(*unsafe.Pointer)(C.orxObject_GetUserData(self.object))))
+    }
+
+    fh += "C." + ei.function_name + "("
 	need_comma := false
 	arg_pos = 0
+
 	if self_func {
-		fh += "self"
+		fh += "self." + self_type
 		need_comma = true
 		arg_pos++
 	}
@@ -195,16 +262,18 @@ func print_extern(line string) {
 		if need_comma {
 			fh += ", "
 		}
-		fh += ei.name_type[arg_pos]
+        fh += wrap_parameter(ei.arg_type[arg_pos], ei.name_type[arg_pos])
 		arg_pos++
 		need_comma = true
 	}
 
-	fh += ")\n}"
+	fh += ")"
+    if ei.return_type == "void*" {
+        fh += ")))"
+    }
+    fh += "\n}\n\n"
 
-	//C.orxObject_Enable(obj.object, C.uint(enable))
-
-	fmt.Printf("%s\n", fh)
+	return fh
 }
 
 func main() {
@@ -219,6 +288,7 @@ func main() {
 		defer C.free(unsafe.Pointer(c_argv[i]))
 	}
 
+	gorx.Object_Create()
 	// Set the bootstrap function to provide at least one resource storage before loading any config files
 	C.orxConfig_SetBootstrap(C.orxCONFIG_BOOTSTRAP_FUNCTION(C.Bootstrap))
 
@@ -230,17 +300,26 @@ func main() {
 	}
 	defer file.Close()
 
+	f, e := os.Create("pkg/obj.go")
+	if e != nil {
+		panic(e)
+	}
+	write_header(f)
+	f.WriteString(generate_struct([]string{"object", "vector", "obox"}))
 	scanner := bufio.NewScanner(file)
 	scanner.Split(bufio.ScanLines)
 	for scanner.Scan() {
 		line := scanner.Text()
 		if strings.Contains(line, "extern") == true {
-			print_extern(line)
+			f.WriteString(generate_extern(line))
 		}
 	}
+	//NewObject()
 	//scanner := bufio.NewScanner("./ext/orx/code/include/object/orxObject.h")
 	//scanner.Split(bufio.ScanLines)
+	//gorx.NewObject()
 
+	//gorx.Create()
 	/*
 		C.orx_Execute(
 			argc,
